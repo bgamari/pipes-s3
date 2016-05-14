@@ -9,17 +9,22 @@ module Pipes.Aws.S3
    , responseBody
    ) where
 
+import Control.Monad (unless)
 import Data.String (IsString)
+
 import qualified Data.ByteString as BS
+import           Data.ByteString (ByteString)
 import qualified Data.Text as T
 
 import Pipes
+import Pipes.Safe
 import Pipes.Conduit
 import qualified Pipes.Prelude as PP
 import qualified Pipes.ByteString as PBS
-import Pipes.HTTP
 import Control.Monad.Trans.Resource
 import Control.Monad.IO.Class
+import Network.HTTP.Client
+import Network.HTTP.Client.TLS
 import qualified Aws
 import qualified Aws.Core as Aws
 import qualified Aws.S3 as S3
@@ -29,12 +34,13 @@ newtype Bucket = Bucket T.Text
 newtype Object = Object T.Text
                deriving (Eq, Ord, Show, Read, IsString)
 
-fromS3 :: Bucket -> Object -> (Response (Producer BS.ByteString IO ()) -> IO a) -> IO a
+fromS3 :: MonadSafe m
+       => Bucket -> Object -> (Response (Producer BS.ByteString m ()) -> m a) -> m a
 fromS3 (Bucket bucket) (Object object) handler = do
-    cfg <- Aws.baseConfiguration
+    cfg <- liftIO Aws.baseConfiguration
     let s3cfg = Aws.defServiceConfig :: S3.S3Configuration Aws.NormalQuery
-    mgr <- newManager tlsManagerSettings
-    req <- buildRequest cfg s3cfg $ S3.getObject bucket object
+    mgr <- liftIO $ newManager tlsManagerSettings
+    req <- liftIO $ buildRequest cfg s3cfg $ S3.getObject bucket object
     withHTTP req mgr handler
 
 buildRequest :: (MonadIO m, Aws.Transaction r a)
@@ -86,3 +92,26 @@ enumFromP :: (Monad m, Enum i) => i -> Pipe a (i, a) m r
 enumFromP = go
   where
     go i = await >>= \x -> yield (i, x) >> go (succ i)
+
+
+-- Stolen from pipes-http
+withHTTP :: MonadSafe m
+         => Request
+         -> Manager
+         -> (Response (Producer ByteString m ()) -> m a)
+         -> m a
+withHTTP req mgr k =
+    Pipes.Safe.bracket (liftIO $ responseOpen req mgr) (liftIO . responseClose) k'
+  where
+    k' resp = do
+        let p = (from . brRead . responseBody) resp
+        k (resp { responseBody = p})
+
+from :: MonadIO m => IO ByteString -> Producer ByteString m ()
+from io = go
+  where
+    go = do
+        bs <- liftIO io
+        unless (BS.null bs) $ do
+            yield bs
+            go
