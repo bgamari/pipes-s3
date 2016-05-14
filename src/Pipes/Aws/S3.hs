@@ -5,6 +5,7 @@ module Pipes.Aws.S3
    ( Bucket(..)
    , Object(..)
    , fromS3
+   , fromS3'
    , toS3
    , responseBody
    ) where
@@ -34,8 +35,22 @@ newtype Bucket = Bucket T.Text
 newtype Object = Object T.Text
                deriving (Eq, Ord, Show, Read, IsString)
 
+fromS3' :: MonadSafe m
+        => Bucket -> Object
+        -> (Response (Producer BS.ByteString m ()) -> Producer BS.ByteString m a)
+        -> Producer BS.ByteString m a
+fromS3' (Bucket bucket) (Object object) handler = do
+    cfg <- liftIO Aws.baseConfiguration
+    let s3cfg = Aws.defServiceConfig :: S3.S3Configuration Aws.NormalQuery
+    mgr <- liftIO $ newManager tlsManagerSettings
+    req <- liftIO $ buildRequest cfg s3cfg $ S3.getObject bucket object
+    Pipes.Safe.bracket (liftIO $ responseOpen req mgr) (liftIO . responseClose) $ \resp ->
+        handler $ resp { responseBody = from $ brRead $ responseBody resp }
+
 fromS3 :: MonadSafe m
-       => Bucket -> Object -> (Response (Producer BS.ByteString m ()) -> m a) -> m a
+       => Bucket -> Object
+       -> (Response (Producer BS.ByteString m ()) -> m a)
+       -> m a
 fromS3 (Bucket bucket) (Object object) handler = do
     cfg <- liftIO Aws.baseConfiguration
     let s3cfg = Aws.defServiceConfig :: S3.S3Configuration Aws.NormalQuery
