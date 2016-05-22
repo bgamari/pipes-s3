@@ -7,7 +7,7 @@ module Pipes.Aws.S3
    , Object(..)
      -- * Downloading
    , fromS3
-   , fromS3'
+     -- ** Convenient re-exports
    , responseBody
      -- * Uploading
    , ChunkSize
@@ -53,11 +53,11 @@ newtype Object = Object T.Text
 -- 'fromS3' bucket object responseBody
 -- @
 --
-fromS3' :: MonadSafe m
-        => Bucket -> Object
-        -> (Response (Producer BS.ByteString m ()) -> Producer BS.ByteString m a)
-        -> Producer BS.ByteString m a
-fromS3' (Bucket bucket) (Object object) handler = do
+fromS3 :: MonadSafe m
+       => Bucket -> Object
+       -> (Response (Producer BS.ByteString m ()) -> Producer BS.ByteString m a)
+       -> Producer BS.ByteString m a
+fromS3 (Bucket bucket) (Object object) handler = do
     cfg <- liftIO Aws.baseConfiguration
     let s3cfg = Aws.defServiceConfig :: S3.S3Configuration Aws.NormalQuery
     mgr <- liftIO $ newManager tlsManagerSettings
@@ -65,17 +65,28 @@ fromS3' (Bucket bucket) (Object object) handler = do
     Pipes.Safe.bracket (liftIO $ responseOpen req mgr) (liftIO . responseClose) $ \resp ->
         handler $ resp { responseBody = from $ brRead $ responseBody resp }
 
--- | Download an object from S3
-fromS3 :: MonadSafe m
-       => Bucket -> Object
-       -> (Response (Producer BS.ByteString m ()) -> m a)
-       -> m a
-fromS3 (Bucket bucket) (Object object) handler = do
-    cfg <- liftIO Aws.baseConfiguration
-    let s3cfg = Aws.defServiceConfig :: S3.S3Configuration Aws.NormalQuery
-    mgr <- liftIO $ newManager tlsManagerSettings
-    req <- liftIO $ buildRequest cfg s3cfg $ S3.getObject bucket object
-    withHTTP req mgr handler
+-- Stolen from pipes-http
+withHTTP :: MonadSafe m
+         => Request
+         -> Manager
+         -> (Response (Producer ByteString m ()) -> m a)
+         -> m a
+withHTTP req mgr k =
+    Pipes.Safe.bracket (liftIO $ responseOpen req mgr) (liftIO . responseClose) k'
+  where
+    k' resp = do
+        let p = (from . brRead . responseBody) resp
+        k (resp { responseBody = p})
+
+from :: MonadIO m => IO ByteString -> Producer ByteString m ()
+from io = go
+  where
+    go = do
+        bs <- liftIO io
+        unless (BS.null bs) $ do
+            yield bs
+            go
+
 
 buildRequest :: (MonadIO m, Aws.Transaction r a)
              => Aws.Configuration
@@ -134,25 +145,3 @@ enumFromP :: (Monad m, Enum i) => i -> Pipe a (i, a) m r
 enumFromP = go
   where
     go i = await >>= \x -> yield (i, x) >> go (succ i)
-
--- Stolen from pipes-http
-withHTTP :: MonadSafe m
-         => Request
-         -> Manager
-         -> (Response (Producer ByteString m ()) -> m a)
-         -> m a
-withHTTP req mgr k =
-    Pipes.Safe.bracket (liftIO $ responseOpen req mgr) (liftIO . responseClose) k'
-  where
-    k' resp = do
-        let p = (from . brRead . responseBody) resp
-        k (resp { responseBody = p})
-
-from :: MonadIO m => IO ByteString -> Producer ByteString m ()
-from io = go
-  where
-    go = do
-        bs <- liftIO io
-        unless (BS.null bs) $ do
-            yield bs
-            go
