@@ -19,7 +19,6 @@ import qualified Data.Text as T
 
 import Pipes
 import Pipes.Safe
-import Pipes.Conduit
 import qualified Pipes.Prelude as PP
 import qualified Pipes.ByteString as PBS
 import Control.Monad.Trans.Resource
