@@ -1,13 +1,17 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
+-- | A simple streaming interface to the AWS S3 storage service.
 module Pipes.Aws.S3
    ( Bucket(..)
    , Object(..)
+     -- * Downloading
    , fromS3
    , fromS3'
-   , toS3
    , responseBody
+     -- * Uploading
+   , ChunkSize
+   , toS3
    ) where
 
 import Control.Monad (unless)
@@ -29,11 +33,26 @@ import qualified Aws
 import qualified Aws.Core as Aws
 import qualified Aws.S3 as S3
 
+-- | An AWS S3 bucket name
 newtype Bucket = Bucket T.Text
                deriving (Eq, Ord, Show, Read, IsString)
+
+-- | An AWS S3 object name
 newtype Object = Object T.Text
                deriving (Eq, Ord, Show, Read, IsString)
 
+-- | Download an object from S3
+--
+-- This initiates an S3 download, requiring that the caller provide a way to
+-- construct a 'Producer' from the initial 'Response' to the request (allowing
+-- the caller to, e.g., handle failure).
+--
+-- For instance to merely produced the content of the response,
+--
+-- @
+-- 'fromS3' bucket object responseBody
+-- @
+--
 fromS3' :: MonadSafe m
         => Bucket -> Object
         -> (Response (Producer BS.ByteString m ()) -> Producer BS.ByteString m a)
@@ -46,6 +65,7 @@ fromS3' (Bucket bucket) (Object object) handler = do
     Pipes.Safe.bracket (liftIO $ responseOpen req mgr) (liftIO . responseClose) $ \resp ->
         handler $ resp { responseBody = from $ brRead $ responseBody resp }
 
+-- | Download an object from S3
 fromS3 :: MonadSafe m
        => Bucket -> Object
        -> (Response (Producer BS.ByteString m ()) -> m a)
@@ -68,10 +88,18 @@ buildRequest cfg scfg req = do
     let signed = Aws.signQuery req scfg sigData
     liftIO $ Aws.queryToHttpRequest signed
 
+-- | To maintain healthy streaming uploads are performed in a chunked manner.
+-- This is the size of the upload chunk size. Due to S3 interface restrictions
+-- this must be at least five megabytes.
 type ChunkSize = Int
+
 type ETag = T.Text
 type PartN = Integer
 
+-- | Upload content to an S3 object.
+--
+-- This internally uses the S3 multi-part upload interface to achieve streaming
+-- upload behavior.
 toS3 :: forall m a. MonadIO m
      => ChunkSize -> Bucket -> Object
      -> Producer BS.ByteString m a
@@ -106,7 +134,6 @@ enumFromP :: (Monad m, Enum i) => i -> Pipe a (i, a) m r
 enumFromP = go
   where
     go i = await >>= \x -> yield (i, x) >> go (succ i)
-
 
 -- Stolen from pipes-http
 withHTTP :: MonadSafe m
