@@ -7,11 +7,13 @@ module Pipes.Aws.S3
    , Object(..)
      -- * Downloading
    , fromS3
+   , fromS3'
      -- ** Convenient re-exports
    , responseBody
      -- * Uploading
    , ChunkSize
    , toS3
+   , toS3'
    ) where
 
 import Control.Monad (unless)
@@ -57,8 +59,17 @@ fromS3 :: MonadSafe m
        => Bucket -> Object
        -> (Response (Producer BS.ByteString m ()) -> Producer BS.ByteString m a)
        -> Producer BS.ByteString m a
-fromS3 (Bucket bucket) (Object object) handler = do
+fromS3 bucket object handler = do
     cfg <- liftIO Aws.baseConfiguration
+    fromS3' cfg bucket object handler
+
+-- | Download an object from S3 explicitly specifying an @aws@ 'Aws.Configuration',
+-- which provides credentials and logging configuration.
+fromS3' :: MonadSafe m
+        => Aws.Configuration -> Bucket -> Object
+        -> (Response (Producer BS.ByteString m ()) -> Producer BS.ByteString m a)
+        -> Producer BS.ByteString m a
+fromS3' cfg (Bucket bucket) (Object object) handler = do
     let s3cfg = Aws.defServiceConfig :: S3.S3Configuration Aws.NormalQuery
     mgr <- liftIO $ newManager tlsManagerSettings
     req <- liftIO $ buildRequest cfg s3cfg $ S3.getObject bucket object
@@ -107,16 +118,25 @@ type ChunkSize = Int
 type ETag = T.Text
 type PartN = Integer
 
--- | Upload content to an S3 object.
---
--- This internally uses the S3 multi-part upload interface to achieve streaming
--- upload behavior.
+-- | Upload content to an S3 object explicitly specifying an @aws@
+-- 'Aws.Configuration', which provides credentials and logging configuration.
 toS3 :: forall m a. MonadIO m
      => ChunkSize -> Bucket -> Object
      -> Producer BS.ByteString m a
      -> m a
-toS3 chunkSize (Bucket bucket) (Object object) consumer = do
+toS3 chunkSize bucket object consumer = do
     cfg <- Aws.baseConfiguration
+    toS3' cfg chunkSize bucket object consumer
+
+-- | Upload content to an S3 object.
+--
+-- This internally uses the S3 multi-part upload interface to achieve streaming
+-- upload behavior.
+toS3' :: forall m a. MonadIO m
+      => Aws.Configuration -> ChunkSize -> Bucket -> Object
+      -> Producer BS.ByteString m a
+      -> m a
+toS3' cfg chunkSize (Bucket bucket) (Object object) consumer = do
     let s3cfg = Aws.defServiceConfig :: S3.S3Configuration Aws.NormalQuery
     mgr <- liftIO $ newManager tlsManagerSettings
 
