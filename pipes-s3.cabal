@@ -1,7 +1,9 @@
 name:                pipes-s3
 version:             0.1.0.0
 synopsis:            A simple interface for streaming data to and from Amazon S3
--- description:
+description:
+    This package provides a simple interface for streaming data to and from
+    Amazon's S3 cloud storage service with the @pipes@ package.
 homepage:            http://github.com/bgamari/pipes-s3
 license:             BSD3
 license-file:        LICENSE
@@ -12,6 +14,10 @@ category:            Network
 build-type:          Simple
 extra-source-files:  ChangeLog.md
 cabal-version:       >=1.10
+
+source-repository head
+  type:      git
+  location:  git://github.com/bgamari/pipes-s3
 
 library
   exposed-modules:     Pipes.Aws.S3
