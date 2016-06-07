@@ -82,7 +82,7 @@ fromS3' :: MonadSafe m
         -> Producer BS.ByteString m a
 fromS3' cfg bucket object handler = do
     mgr <- liftIO $ newManager tlsManagerSettings
-    fromS3WithManager mgr cfg bucket object handler
+    fromS3WithManager mgr cfg Aws.defServiceConfig bucket object handler
 
 -- | Download an object from S3 explicitly specifying an @http-client@ 'Manager'
 -- and @aws@ 'Aws.Configuration' (which provides credentials and logging
@@ -98,11 +98,12 @@ fromS3' cfg bucket object handler = do
 fromS3WithManager
         :: MonadSafe m
         => Manager
-        -> Aws.Configuration -> Bucket -> Object
+        -> Aws.Configuration
+        -> S3.S3Configuration Aws.NormalQuery
+        -> Bucket -> Object
         -> (Response (Producer BS.ByteString m ()) -> Producer BS.ByteString m a)
         -> Producer BS.ByteString m a
-fromS3WithManager mgr cfg (Bucket bucket) (Object object) handler = do
-    let s3cfg = Aws.defServiceConfig :: S3.S3Configuration Aws.NormalQuery
+fromS3WithManager mgr cfg s3cfg (Bucket bucket) (Object object) handler = do
     req <- liftIO $ buildRequest cfg s3cfg $ S3.getObject bucket object
     Pipes.Safe.bracket (liftIO $ responseOpen req mgr) (liftIO . responseClose) $ \resp ->
         handler $ resp { responseBody = from $ brRead $ responseBody resp }
@@ -166,7 +167,7 @@ toS3' :: forall m a. MonadIO m
       -> m a
 toS3' cfg chunkSize bucket object consumer = do
     mgr <- liftIO $ newManager tlsManagerSettings
-    toS3WithManager mgr cfg chunkSize bucket object consumer
+    toS3WithManager mgr cfg Aws.defServiceConfig chunkSize bucket object consumer
 
 -- | Download an object from S3 explicitly specifying an @http-client@ 'Manager'
 -- and @aws@ 'Aws.Configuration' (which provides credentials and logging
@@ -180,12 +181,11 @@ toS3' cfg chunkSize bucket object consumer = do
 -- 'newManager' 'HTTP.Client.TLS.tlsManagerSettings'
 -- @
 toS3WithManager :: forall m a. MonadIO m
-      => Manager -> Aws.Configuration -> ChunkSize -> Bucket -> Object
+      => Manager -> Aws.Configuration -> S3.S3Configuration Aws.NormalQuery
+      -> ChunkSize -> Bucket -> Object
       -> Producer BS.ByteString m a
       -> m a
-toS3WithManager mgr cfg chunkSize (Bucket bucket) (Object object) consumer = do
-    let s3cfg = Aws.defServiceConfig :: S3.S3Configuration Aws.NormalQuery
-
+toS3WithManager mgr cfg s3cfg chunkSize (Bucket bucket) (Object object) consumer = do
     resp1 <- liftIO $ runResourceT
              $ Aws.pureAws cfg s3cfg mgr
              $ S3.postInitiateMultipartUpload bucket object
