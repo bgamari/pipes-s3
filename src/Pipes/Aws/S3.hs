@@ -198,7 +198,7 @@ toS3WithManager mgr cfg s3cfg chunkSize (Bucket bucket) (Object object) consumer
                     $ S3.uploadPart bucket object partN uploadId (RequestBodyBS content)
             return (partN, S3.uprETag resp)
 
-    (parts, res) <- PP.toListM' $ consumer
+    (parts, res) <- PP.toListM' $ PBS.chunksOf' chunkSize consumer
                               >-> enumFromP 1
                               >-> PP.mapM uploadPart
 
