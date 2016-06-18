@@ -52,7 +52,7 @@ newtype Object = Object T.Text
 -- construct a 'Producer' from the initial 'Response' to the request (allowing
 -- the caller to, e.g., handle failure).
 --
--- For instance to merely produced the content of the response,
+-- For instance to merely return produced the content of the response,
 --
 -- @
 -- 'fromS3' bucket object responseBody
