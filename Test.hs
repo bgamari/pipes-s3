@@ -66,6 +66,8 @@ propFailure :: S3.Bucket -> S3.Object -> ChunkSize -> BSL.ByteString -> Property
 propFailure bucket object (ChunkSize chunkSize) content = monadicIO $ do
     run $ handle handleFailure $ do
         S3.toS3 chunkSize bucket object (each (BSL.toChunks content) >> throwM FailureException)
-        return False -- We shouldn't get here
+        fail "unexpectedly succeeded"
   where
-    handleFailure FailureException = return True
+    handleFailure (S3.FailedUploadError {S3.failedUploadException = exc})
+      | Just FailureException <- fromException exc = return ()
+      | otherwise = fail $ "failed with exception: "++show exc
