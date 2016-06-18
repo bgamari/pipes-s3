@@ -137,7 +137,7 @@ type ETag = T.Text
 type PartN = Integer
 
 -- | Upload content to an S3 object.
-toS3 :: forall m a. MonadIO m
+toS3 :: forall m a. (MonadIO m, MonadCatch m)
      => ChunkSize -> Bucket -> Object
      -> Producer BS.ByteString m a
      -> m a
@@ -147,7 +147,7 @@ toS3 chunkSize bucket object consumer = do
 
 -- | Upload content to an S3 object, explicitly specifying an
 -- 'Aws.Configuration', which provides credentials and logging configuration.
-toS3' :: forall m a. MonadIO m
+toS3' :: forall m a. (MonadIO m, MonadCatch m)
       => Aws.Configuration -> ChunkSize -> Bucket -> Object
       -> Producer BS.ByteString m a
       -> m a
@@ -166,7 +166,7 @@ toS3' cfg chunkSize bucket object consumer = do
 -- @
 -- 'newManager' 'HTTP.Client.TLS.tlsManagerSettings'
 -- @
-toS3WithManager :: forall m a. MonadIO m
+toS3WithManager :: forall m a. (MonadIO m, MonadCatch m)
       => Manager -> Aws.Configuration -> S3.S3Configuration Aws.NormalQuery
       -> ChunkSize -> Bucket -> Object
       -> Producer BS.ByteString m a
@@ -176,33 +176,27 @@ toS3WithManager mgr cfg s3cfg chunkSize (Bucket bucket) (Object object) consumer
              $ Aws.pureAws cfg s3cfg mgr
              $ S3.postInitiateMultipartUpload bucket object
     let uploadId = S3.imurUploadId resp1
+        abortUpload err = do
+            _ <- liftIO $ runResourceT $ Aws.pureAws cfg s3cfg mgr
+                        $ S3.postAbortMultipartUpload bucket object uploadId
+            throwM err
 
-    let checkOkayOrAbort :: forall meta a. Aws.Response meta a -> IO a
-        checkOkayOrAbort resp =
-            case Aws.responseResult resp of
-              Left err -> do
-                  _ <- runResourceT $ Aws.pureAws cfg s3cfg mgr
-                                    $ S3.postAbortMultipartUpload bucket object uploadId
-                  throwM err
-              Right s3Resp -> return s3Resp
+    handleAll abortUpload $ do
+        let uploadPart :: (PartN, BS.ByteString) -> m (PartN, ETag)
+            uploadPart (partN, content) = do
+                resp <- liftIO $ runResourceT
+                        $ Aws.pureAws cfg s3cfg mgr
+                        $ S3.uploadPart bucket object partN uploadId (RequestBodyBS content)
+                return (partN, S3.uprETag resp)
 
-    let uploadPart :: (PartN, BS.ByteString) -> m (PartN, ETag)
-        uploadPart (partN, content) = do
-            resp <- liftIO $ runResourceT
-                    $ Aws.aws cfg s3cfg mgr
-                    $ S3.uploadPart bucket object partN uploadId (RequestBodyBS content)
-            s3Resp <- liftIO $ checkOkayOrAbort resp
-            return (partN, S3.uprETag s3Resp)
+        (parts, res) <- PP.toListM' $ PBS.chunksOf' chunkSize consumer
+                                  >-> enumFromP 1
+                                  >-> PP.mapM uploadPart
 
-    (parts, res) <- PP.toListM' $ PBS.chunksOf' chunkSize consumer
-                              >-> enumFromP 1
-                              >-> PP.mapM uploadPart
-
-    resp2 <- liftIO $ runResourceT
-             $ Aws.aws cfg s3cfg mgr
-             $ S3.postCompleteMultipartUpload bucket object uploadId parts
-    _ <- liftIO $ checkOkayOrAbort resp2
-    return res
+        _ <- liftIO $ runResourceT
+            $ Aws.pureAws cfg s3cfg mgr
+            $ S3.postCompleteMultipartUpload bucket object uploadId parts
+        return res
 
 enumFromP :: (Monad m, Enum i) => i -> Pipe a (i, a) m r
 enumFromP = go
