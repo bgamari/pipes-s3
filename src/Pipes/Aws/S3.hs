@@ -107,19 +107,6 @@ fromS3WithManager mgr cfg s3cfg (Bucket bucket) (Object object) handler = do
     Pipes.Safe.bracket (liftIO $ responseOpen req mgr) (liftIO . responseClose) $ \resp ->
         handler $ resp { responseBody = from $ brRead $ responseBody resp }
 
--- Stolen from pipes-http
-withHTTP :: MonadSafe m
-         => Request
-         -> Manager
-         -> (Response (Producer ByteString m ()) -> m a)
-         -> m a
-withHTTP req mgr k =
-    Pipes.Safe.bracket (liftIO $ responseOpen req mgr) (liftIO . responseClose) k'
-  where
-    k' resp = do
-        let p = (from . brRead . responseBody) resp
-        k (resp { responseBody = p})
-
 from :: MonadIO m => IO ByteString -> Producer ByteString m ()
 from io = go
   where
