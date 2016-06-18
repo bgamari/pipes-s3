@@ -12,8 +12,9 @@ import Test.QuickCheck.Monadic
 
 main :: IO ()
 main = do
-    quickCheck $ testRoundTrip bucket object
-    quickCheck $ testFailure bucket object
+    quickCheck $ propRoundTrip bucket object
+    quickCheck $ propFailure bucket object
+    quickCheck $ propEmptyFails bucket object
   where
     bucket = S3.Bucket "bgamari-test"
     object = S3.Object "test"
@@ -47,14 +48,22 @@ instance Arbitrary BS.ByteString where
 instance Arbitrary BSL.ByteString where
     arbitrary = BSL.fromChunks . getNonEmpty <$> arbitrary
 
-testRoundTrip :: S3.Bucket -> S3.Object -> ChunkSize -> BSL.ByteString -> Property
-testRoundTrip bucket object (ChunkSize chunkSize) content = monadicIO $ do
+propEmptyFails :: S3.Bucket -> S3.Object -> ChunkSize -> Property
+propEmptyFails bucket object (ChunkSize chunkSize) = monadicIO $ do
+    run $ handle checkException $ do
+        S3.toS3 chunkSize bucket object (each $ replicate 5 BS.empty)
+        fail "empty uploads should fail"
+  where
+    checkException (S3.EmptyS3UploadError _ _) = return ()
+
+propRoundTrip :: S3.Bucket -> S3.Object -> ChunkSize -> BSL.ByteString -> Property
+propRoundTrip bucket object (ChunkSize chunkSize) content = monadicIO $ do
     run $ S3.toS3 chunkSize bucket object (each $ BSL.toChunks content)
     content' <- run $ runSafeT $ PBS.toLazyM $ S3.fromS3 bucket object S3.responseBody
     return $ content == content'
 
-testFailure :: S3.Bucket -> S3.Object -> ChunkSize -> BSL.ByteString -> Property
-testFailure bucket object (ChunkSize chunkSize) content = monadicIO $ do
+propFailure :: S3.Bucket -> S3.Object -> ChunkSize -> BSL.ByteString -> Property
+propFailure bucket object (ChunkSize chunkSize) content = monadicIO $ do
     run $ handle handleFailure $ do
         S3.toS3 chunkSize bucket object (each (BSL.toChunks content) >> throwM FailureException)
         return False -- We shouldn't get here
