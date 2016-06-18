@@ -14,11 +14,27 @@ module Pipes.Aws.S3
      -- * Uploading
      -- | These internally use the S3 multi-part upload interface to achieve
      -- streaming upload behavior.
+     --
+     -- In the case of failure one of two exceptions will be thrown,
+     --
+     --   - 'EmptyS3UploadError': In the event that the 'Producer' fails to
+     --     produce any content to upload
+     --
+     --   - 'FailedUploadError': In any other case.
+     --
+     -- The 'FailedUploadError' exception carries the 'UploadId' of the failed
+     -- upload as well as the inner exception. Note that while the library makes
+     -- an attempt to clean up the parts of the partial upload, there may still
+     -- be remnants due to limitations in the @aws@ library.
+     --
    , ChunkSize
    , toS3
    , toS3'
    , toS3WithManager
+     -- * Error handling
    , EmptyS3UploadError(..)
+   , FailedUploadError(..)
+   , UploadId(..)
    ) where
 
 import Control.Monad (unless, when)
@@ -53,6 +69,20 @@ data EmptyS3UploadError = EmptyS3UploadError Bucket Object
                         deriving (Show)
 
 instance Exception EmptyS3UploadError
+
+-- | An identifier representing an active upload.
+newtype UploadId = UploadId T.Text
+                 deriving (Show, Eq, Ord)
+
+-- | Thrown when an error occurs during an upload.
+data FailedUploadError = FailedUploadError { failedUploadBucket    :: Bucket
+                                           , failedUploadObject    :: Object
+                                           , failedUploadException :: SomeException
+                                           , failedUploadId        :: UploadId
+                                           }
+                       deriving (Show)
+
+instance Exception FailedUploadError
 
 -- | Download an object from S3
 --
@@ -191,28 +221,29 @@ toS3WithManager :: forall m a. (MonadIO m, MonadCatch m)
       -> ChunkSize -> Bucket -> Object
       -> Producer BS.ByteString m a
       -> m a
-toS3WithManager mgr cfg s3cfg chunkSize (Bucket bucket) (Object object) consumer = do
+toS3WithManager mgr cfg s3cfg chunkSize bucket object consumer = do
+    let Bucket bucketName = bucket
+        Object objectName = object
     resp1 <- liftIO $ runResourceT
              $ Aws.pureAws cfg s3cfg mgr
-             $ S3.postInitiateMultipartUpload bucket object
+             $ S3.postInitiateMultipartUpload bucketName objectName
     let uploadId = S3.imurUploadId resp1
-        abortUpload err = do
-            case err of
-              _ | Just (EmptyS3UploadError _ _) <- fromException err ->
-                  -- Otherwise we apparently get a 'Missing root element' error
-                  -- when aborting.
-                  return ()
-              _                      ->
-                  liftIO $ void $ runResourceT $ Aws.pureAws cfg s3cfg mgr
-                         $ S3.postAbortMultipartUpload bucket object uploadId
-            throwM err
+        abortUpload err
+            -- Otherwise we apparently get a 'Missing root element' error
+            -- when aborting.
+          | Just (EmptyS3UploadError _ _) <- fromException err = throwM err
+          | otherwise = do
+              liftIO $ void $ runResourceT $ Aws.pureAws cfg s3cfg mgr
+                     $ S3.postAbortMultipartUpload bucketName objectName uploadId
+              throwM $ FailedUploadError bucket object err (UploadId uploadId)
 
     handleAll abortUpload $ do
         let uploadPart :: (PartN, BS.ByteString) -> m (PartN, ETag)
             uploadPart (partN, content) = do
                 resp <- liftIO $ runResourceT
                         $ Aws.pureAws cfg s3cfg mgr
-                        $ S3.uploadPart bucket object partN uploadId (RequestBodyBS content)
+                        $ S3.uploadPart bucketName objectName
+                                        partN uploadId (RequestBodyBS content)
                 return (partN, S3.uprETag resp)
 
         (parts, res) <- PP.toListM' $ PBS.chunksOf' chunkSize consumer
@@ -223,11 +254,11 @@ toS3WithManager mgr cfg s3cfg chunkSize (Bucket bucket) (Object object) consumer
         -- We handle this specifically to provide a more sensible error than
         -- "Missing root element"
         when (null parts)
-            $ throwM (EmptyS3UploadError (Bucket bucket) (Object object))
+            $ throwM (EmptyS3UploadError bucket object)
 
         _ <- liftIO $ runResourceT
             $ Aws.pureAws cfg s3cfg mgr
-            $ S3.postCompleteMultipartUpload bucket object uploadId parts
+            $ S3.postCompleteMultipartUpload bucketName objectName uploadId parts
         return res
 
 enumFromP :: (Monad m, Enum i) => i -> Pipe a (i, a) m r
