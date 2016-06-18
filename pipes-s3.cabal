@@ -1,5 +1,5 @@
 name:                pipes-s3
-version:             0.2.0.0
+version:             0.3.0.0
 synopsis:            A simple interface for streaming data to and from Amazon S3
 description:
     This package provides a simple interface for streaming data to and from
