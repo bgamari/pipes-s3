@@ -191,22 +191,32 @@ toS3WithManager mgr cfg s3cfg chunkSize (Bucket bucket) (Object object) consumer
              $ S3.postInitiateMultipartUpload bucket object
     let uploadId = S3.imurUploadId resp1
 
+    let checkOkayOrAbort :: forall meta a. Aws.Response meta a -> IO a
+        checkOkayOrAbort resp =
+            case Aws.responseResult resp of
+              Left err -> do
+                  _ <- runResourceT $ Aws.pureAws cfg s3cfg mgr
+                                    $ S3.postAbortMultipartUpload bucket object uploadId
+                  throwM err
+              Right s3Resp -> return s3Resp
+
     let uploadPart :: (PartN, BS.ByteString) -> m (PartN, ETag)
         uploadPart (partN, content) = do
             resp <- liftIO $ runResourceT
-                    $ Aws.pureAws cfg s3cfg mgr
+                    $ Aws.aws cfg s3cfg mgr
                     $ S3.uploadPart bucket object partN uploadId (RequestBodyBS content)
-            return (partN, S3.uprETag resp)
+            s3Resp <- liftIO $ checkOkayOrAbort resp
+            return (partN, S3.uprETag s3Resp)
 
     (parts, res) <- PP.toListM' $ PBS.chunksOf' chunkSize consumer
                               >-> enumFromP 1
                               >-> PP.mapM uploadPart
 
     resp2 <- liftIO $ runResourceT
-             $ Aws.pureAws cfg s3cfg mgr
+             $ Aws.aws cfg s3cfg mgr
              $ S3.postCompleteMultipartUpload bucket object uploadId parts
+    _ <- liftIO $ checkOkayOrAbort resp2
     return res
-
 
 enumFromP :: (Monad m, Enum i) => i -> Pipe a (i, a) m r
 enumFromP = go
