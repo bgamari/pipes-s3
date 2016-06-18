@@ -123,7 +123,7 @@ buildRequest :: (MonadIO m, Aws.Transaction r a)
              -> r
              -> m Request
 buildRequest cfg scfg req = do
-    Just cred <- Aws.loadCredentialsDefault
+    let cred = Aws.credentials cfg
     sigData <- liftIO $ Aws.signatureData Aws.Timestamp cred
     let signed = Aws.signQuery req scfg sigData
     liftIO $ Aws.queryToHttpRequest signed
