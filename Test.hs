@@ -7,14 +7,17 @@ import qualified Pipes.Aws.S3 as S3
 import Pipes.ByteString as PBS
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
+import Test.Tasty
+import Test.Tasty.QuickCheck
 import Test.QuickCheck
 import Test.QuickCheck.Monadic
 
 main :: IO ()
-main = do
-    quickCheck $ propRoundTrip bucket object
-    quickCheck $ propFailure bucket object
-    quickCheck $ propEmptyFails bucket object
+main = defaultMain $ testGroup "tests"
+    [ testProperty "round-trip" $ propRoundTrip bucket object
+    , testProperty "failures fail" $ propFailure bucket object
+    , testProperty "empty uploads fail" $ propEmptyFails bucket object
+    ]
   where
     bucket = S3.Bucket "bgamari-test"
     object = S3.Object "test"
