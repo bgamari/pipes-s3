@@ -7,7 +7,6 @@ import qualified Pipes.Aws.S3 as S3
 import Pipes.ByteString as PBS
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
-import Control.Monad.Catch
 import Test.QuickCheck
 import Test.QuickCheck.Monadic
 
