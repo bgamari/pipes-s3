@@ -18,9 +18,11 @@ module Pipes.Aws.S3
    , toS3
    , toS3'
    , toS3WithManager
+   , EmptyS3UploadError(..)
    ) where
 
-import Control.Monad (unless)
+import Control.Monad (unless, when)
+import Control.Exception (Exception)
 import Data.String (IsString)
 
 import qualified Data.ByteString as BS
@@ -45,6 +47,12 @@ newtype Bucket = Bucket T.Text
 -- | An AWS S3 object name
 newtype Object = Object T.Text
                deriving (Eq, Ord, Show, Read, IsString)
+
+-- | Thrown when an upload with no data is attempted.
+data EmptyS3UploadError = EmptyS3UploadError Bucket Object
+                        deriving (Show)
+
+instance Exception EmptyS3UploadError
 
 -- | Download an object from S3
 --
@@ -137,6 +145,8 @@ type ETag = T.Text
 type PartN = Integer
 
 -- | Upload content to an S3 object.
+--
+-- May throw a 'EmptyS3UploadError' if the producer fails to provide any content.
 toS3 :: forall m a. (MonadIO m, MonadCatch m)
      => ChunkSize -> Bucket -> Object
      -> Producer BS.ByteString m a
@@ -147,6 +157,8 @@ toS3 chunkSize bucket object consumer = do
 
 -- | Upload content to an S3 object, explicitly specifying an
 -- 'Aws.Configuration', which provides credentials and logging configuration.
+--
+-- May throw a 'EmptyS3UploadError' if the producer fails to provide any content.
 toS3' :: forall m a. (MonadIO m, MonadCatch m)
       => Aws.Configuration -> ChunkSize -> Bucket -> Object
       -> Producer BS.ByteString m a
@@ -166,6 +178,8 @@ toS3' cfg chunkSize bucket object consumer = do
 -- @
 -- 'newManager' 'HTTP.Client.TLS.tlsManagerSettings'
 -- @
+--
+-- May throw a 'EmptyS3UploadError' if the producer fails to provide any content.
 toS3WithManager :: forall m a. (MonadIO m, MonadCatch m)
       => Manager -> Aws.Configuration -> S3.S3Configuration Aws.NormalQuery
       -> ChunkSize -> Bucket -> Object
@@ -177,8 +191,14 @@ toS3WithManager mgr cfg s3cfg chunkSize (Bucket bucket) (Object object) consumer
              $ S3.postInitiateMultipartUpload bucket object
     let uploadId = S3.imurUploadId resp1
         abortUpload err = do
-            _ <- liftIO $ runResourceT $ Aws.pureAws cfg s3cfg mgr
-                        $ S3.postAbortMultipartUpload bucket object uploadId
+            case err of
+              _ | Just (EmptyS3UploadError _ _) <- fromException err ->
+                  -- Otherwise we apparently get a 'Missing root element' error
+                  -- when aborting.
+                  return ()
+              _                      ->
+                  liftIO $ void $ runResourceT $ Aws.pureAws cfg s3cfg mgr
+                         $ S3.postAbortMultipartUpload bucket object uploadId
             throwM err
 
     handleAll abortUpload $ do
@@ -190,8 +210,14 @@ toS3WithManager mgr cfg s3cfg chunkSize (Bucket bucket) (Object object) consumer
                 return (partN, S3.uprETag resp)
 
         (parts, res) <- PP.toListM' $ PBS.chunksOf' chunkSize consumer
+                                  >-> PP.filter (not . BS.null)
                                   >-> enumFromP 1
                                   >-> PP.mapM uploadPart
+
+        -- We handle this specifically to provide a more sensible error than
+        -- "Missing root element"
+        when (null parts)
+            $ throwM (EmptyS3UploadError (Bucket bucket) (Object object))
 
         _ <- liftIO $ runResourceT
             $ Aws.pureAws cfg s3cfg mgr
