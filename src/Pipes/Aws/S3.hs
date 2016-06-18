@@ -75,7 +75,7 @@ fromS3 :: MonadSafe m
        -> Producer BS.ByteString m a
 fromS3 bucket object handler = do
     cfg <- liftIO Aws.baseConfiguration
-    fromS3' cfg bucket object handler
+    fromS3' cfg Aws.defServiceConfig bucket object handler
 
 -- | Download an object from S3 explicitly specifying an @aws@ 'Aws.Configuration',
 -- which provides credentials and logging configuration.
@@ -84,12 +84,14 @@ fromS3 bucket object handler = do
 -- be very efficient for many small requests. See 'fromS3WithManager' for more
 -- control over the 'Manager' used.
 fromS3' :: MonadSafe m
-        => Aws.Configuration -> Bucket -> Object
+        => Aws.Configuration                    -- ^ e.g. from 'Aws.baseConfiguration'
+        -> S3.S3Configuration Aws.NormalQuery   -- ^ e.g. 'Aws.defServiceConfig'
+        -> Bucket -> Object
         -> (Response (Producer BS.ByteString m ()) -> Producer BS.ByteString m a)
         -> Producer BS.ByteString m a
-fromS3' cfg bucket object handler = do
+fromS3' cfg s3cfg bucket object handler = do
     mgr <- liftIO $ newManager tlsManagerSettings
-    fromS3WithManager mgr cfg Aws.defServiceConfig bucket object handler
+    fromS3WithManager mgr cfg s3cfg bucket object handler
 
 -- | Download an object from S3 explicitly specifying an @http-client@ 'Manager'
 -- and @aws@ 'Aws.Configuration' (which provides credentials and logging
@@ -105,8 +107,8 @@ fromS3' cfg bucket object handler = do
 fromS3WithManager
         :: MonadSafe m
         => Manager
-        -> Aws.Configuration
-        -> S3.S3Configuration Aws.NormalQuery
+        -> Aws.Configuration                    -- ^ e.g. from 'Aws.baseConfiguration'
+        -> S3.S3Configuration Aws.NormalQuery   -- ^ e.g. 'Aws.defServiceConfig'
         -> Bucket -> Object
         -> (Response (Producer BS.ByteString m ()) -> Producer BS.ByteString m a)
         -> Producer BS.ByteString m a
@@ -153,19 +155,21 @@ toS3 :: forall m a. (MonadIO m, MonadCatch m)
      -> m a
 toS3 chunkSize bucket object consumer = do
     cfg <- Aws.baseConfiguration
-    toS3' cfg chunkSize bucket object consumer
+    toS3' cfg Aws.defServiceConfig chunkSize bucket object consumer
 
 -- | Upload content to an S3 object, explicitly specifying an
 -- 'Aws.Configuration', which provides credentials and logging configuration.
 --
 -- May throw a 'EmptyS3UploadError' if the producer fails to provide any content.
 toS3' :: forall m a. (MonadIO m, MonadCatch m)
-      => Aws.Configuration -> ChunkSize -> Bucket -> Object
+      => Aws.Configuration                    -- ^ e.g. from 'Aws.baseConfiguration'
+      -> S3.S3Configuration Aws.NormalQuery   -- ^ e.g. 'Aws.defServiceConfig'
+      -> ChunkSize -> Bucket -> Object
       -> Producer BS.ByteString m a
       -> m a
-toS3' cfg chunkSize bucket object consumer = do
+toS3' cfg s3cfg chunkSize bucket object consumer = do
     mgr <- liftIO $ newManager tlsManagerSettings
-    toS3WithManager mgr cfg Aws.defServiceConfig chunkSize bucket object consumer
+    toS3WithManager mgr cfg s3cfg chunkSize bucket object consumer
 
 -- | Download an object from S3 explicitly specifying an @http-client@ 'Manager'
 -- and @aws@ 'Aws.Configuration' (which provides credentials and logging
@@ -181,7 +185,9 @@ toS3' cfg chunkSize bucket object consumer = do
 --
 -- May throw a 'EmptyS3UploadError' if the producer fails to provide any content.
 toS3WithManager :: forall m a. (MonadIO m, MonadCatch m)
-      => Manager -> Aws.Configuration -> S3.S3Configuration Aws.NormalQuery
+      => Manager
+      -> Aws.Configuration                    -- ^ e.g. from 'Aws.baseConfiguration'
+      -> S3.S3Configuration Aws.NormalQuery   -- ^ e.g. 'Aws.defServiceConfig'
       -> ChunkSize -> Bucket -> Object
       -> Producer BS.ByteString m a
       -> m a
