@@ -32,7 +32,6 @@ import Pipes.Safe
 import qualified Pipes.Prelude as PP
 import qualified Pipes.ByteString as PBS
 import Control.Monad.Trans.Resource
-import Control.Monad.IO.Class
 import Network.HTTP.Client
 import Network.HTTP.Client.TLS
 import qualified Aws
