@@ -42,10 +42,10 @@ data FailureException = FailureException
 instance Exception FailureException
 
 instance Arbitrary BS.ByteString where
-    arbitrary = BS.pack <$> arbitrary
+    arbitrary = BS.pack . getNonEmpty <$> arbitrary
 
 instance Arbitrary BSL.ByteString where
-    arbitrary = BSL.fromChunks <$> arbitrary
+    arbitrary = BSL.fromChunks . getNonEmpty <$> arbitrary
 
 testRoundTrip :: S3.Bucket -> S3.Object -> ChunkSize -> BSL.ByteString -> Property
 testRoundTrip bucket object (ChunkSize chunkSize) content = monadicIO $ do
