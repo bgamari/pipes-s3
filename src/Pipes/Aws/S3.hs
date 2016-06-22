@@ -234,8 +234,8 @@ toS3WithManager mgr cfg s3cfg chunkSize bucket object consumer = do
               resp <- liftIO $ runResourceT $ Aws.aws cfg s3cfg mgr
                              $ S3.postAbortMultipartUpload bucketName objectName uploadId
               case Aws.responseResult resp of
-                Left err -> throwM err
-                Right _ -> throwM $ FailedUploadError bucket object err (UploadId uploadId)
+                Left err' -> throwM err'
+                Right _   -> throwM $ FailedUploadError bucket object err (UploadId uploadId)
 
     handleAll abortUpload $ do
         let uploadPart :: (PartN, BS.ByteString) -> m (PartN, ETag)
