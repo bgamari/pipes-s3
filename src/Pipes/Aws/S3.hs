@@ -10,8 +10,7 @@ module Pipes.Aws.S3
    , fromS3
    , fromS3'
    , fromS3WithManager
-     -- ** Convenient re-exports
-   , responseBody
+
      -- * Uploading
      -- | These internally use the S3 multi-part upload interface to achieve
      -- streaming upload behavior.
@@ -32,6 +31,7 @@ module Pipes.Aws.S3
    , toS3
    , toS3'
    , toS3WithManager
+
      -- * Error handling
    , S3DownloadError(..)
    , EmptyS3UploadError(..)
