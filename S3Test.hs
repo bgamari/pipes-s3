@@ -12,7 +12,7 @@ object = "common-crawl/crawl-data/CC-MAIN-2015-40/segments/1443736672328.14/warc
 
 main :: IO ()
 main = do
-    r <- runSafeT $ runEffect $ GZip.decompress (S3.fromS3 bucket object (\resp -> liftIO (print $ responseStatus resp) >>S3.responseBody resp)) >-> PBS.stdout
+    r <- runSafeT $ runEffect $ GZip.decompress (S3.fromS3 bucket object) >-> PBS.stdout
     print r
     return ()
 

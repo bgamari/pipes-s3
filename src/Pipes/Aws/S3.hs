@@ -6,6 +6,7 @@ module Pipes.Aws.S3
    ( Bucket(..)
    , Object(..)
      -- * Downloading
+     -- | These may fail with either an 'S3DownloadError' or a 'Aws.S3Error'.
    , fromS3
    , fromS3'
    , fromS3WithManager
@@ -32,6 +33,7 @@ module Pipes.Aws.S3
    , toS3'
    , toS3WithManager
      -- * Error handling
+   , S3DownloadError(..)
    , EmptyS3UploadError(..)
    , FailedUploadError(..)
    , UploadId(..)
@@ -50,6 +52,7 @@ import Pipes.Safe
 import qualified Pipes.Prelude as PP
 import qualified Pipes.ByteString as PBS
 import Control.Monad.Trans.Resource
+import Network.HTTP.Types
 import Network.HTTP.Client
 import Network.HTTP.Client.TLS
 import qualified Aws
@@ -63,6 +66,12 @@ newtype Bucket = Bucket T.Text
 -- | An AWS S3 object name
 newtype Object = Object T.Text
                deriving (Eq, Ord, Show, Read, IsString)
+
+-- | Thrown when an unknown status code is returned from an S3 download request.
+data S3DownloadError = S3DownloadError Bucket Object Status
+                     deriving (Show)
+
+instance Exception S3DownloadError
 
 -- | Thrown when an upload with no data is attempted.
 data EmptyS3UploadError = EmptyS3UploadError Bucket Object
@@ -86,26 +95,15 @@ instance Exception FailedUploadError
 
 -- | Download an object from S3
 --
--- This initiates an S3 download, requiring that the caller provide a way to
--- construct a 'Producer' from the initial 'Response' to the request (allowing
--- the caller to, e.g., handle failure).
---
--- For instance to merely return produced the content of the response,
---
--- @
--- 'fromS3' bucket object responseBody
--- @
---
 -- Note that this makes no attempt at reusing a 'Manager' and therefore may not
 -- be very efficient for many small requests. See 'fromS3WithManager' for more
 -- control over the 'Manager' used.
 fromS3 :: MonadSafe m
        => Bucket -> Object
-       -> (Response (Producer BS.ByteString m ()) -> Producer BS.ByteString m a)
-       -> Producer BS.ByteString m a
-fromS3 bucket object handler = do
+       -> Producer BS.ByteString m ()
+fromS3 bucket object = do
     cfg <- liftIO Aws.baseConfiguration
-    fromS3' cfg Aws.defServiceConfig bucket object handler
+    fromS3' cfg Aws.defServiceConfig bucket object
 
 -- | Download an object from S3 explicitly specifying an @aws@ 'Aws.Configuration',
 -- which provides credentials and logging configuration.
@@ -117,11 +115,10 @@ fromS3' :: MonadSafe m
         => Aws.Configuration                    -- ^ e.g. from 'Aws.baseConfiguration'
         -> S3.S3Configuration Aws.NormalQuery   -- ^ e.g. 'Aws.defServiceConfig'
         -> Bucket -> Object
-        -> (Response (Producer BS.ByteString m ()) -> Producer BS.ByteString m a)
-        -> Producer BS.ByteString m a
-fromS3' cfg s3cfg bucket object handler = do
+        -> Producer BS.ByteString m ()
+fromS3' cfg s3cfg bucket object = do
     mgr <- liftIO $ newManager tlsManagerSettings
-    fromS3WithManager mgr cfg s3cfg bucket object handler
+    fromS3WithManager mgr cfg s3cfg bucket object
 
 -- | Download an object from S3 explicitly specifying an @http-client@ 'Manager'
 -- and @aws@ 'Aws.Configuration' (which provides credentials and logging
@@ -140,12 +137,13 @@ fromS3WithManager
         -> Aws.Configuration                    -- ^ e.g. from 'Aws.baseConfiguration'
         -> S3.S3Configuration Aws.NormalQuery   -- ^ e.g. 'Aws.defServiceConfig'
         -> Bucket -> Object
-        -> (Response (Producer BS.ByteString m ()) -> Producer BS.ByteString m a)
-        -> Producer BS.ByteString m a
-fromS3WithManager mgr cfg s3cfg (Bucket bucket) (Object object) handler = do
+        -> Producer BS.ByteString m ()
+fromS3WithManager mgr cfg s3cfg (Bucket bucket) (Object object) = do
     req <- liftIO $ buildRequest cfg s3cfg $ S3.getObject bucket object
     Pipes.Safe.bracket (liftIO $ responseOpen req mgr) (liftIO . responseClose) $ \resp ->
-        handler $ resp { responseBody = from $ brRead $ responseBody resp }
+        if statusIsSuccessful (responseStatus resp)
+          then from $ brRead $ responseBody resp
+          else throwM $ S3DownloadError (Bucket bucket) (Object object) (responseStatus resp)
 
 from :: MonadIO m => IO ByteString -> Producer ByteString m ()
 from io = go
