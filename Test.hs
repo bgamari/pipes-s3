@@ -62,7 +62,7 @@ propEmptyFails bucket object (ChunkSize chunkSize) = monadicIO $ do
 propRoundTrip :: S3.Bucket -> S3.Object -> ChunkSize -> BSL.ByteString -> Property
 propRoundTrip bucket object (ChunkSize chunkSize) content = monadicIO $ do
     run $ S3.toS3 chunkSize bucket object (each $ BSL.toChunks content)
-    content' <- run $ runSafeT $ PBS.toLazyM $ S3.fromS3 bucket object
+    content' <- run $ runSafeT $ PBS.toLazyM $ S3.fromS3 bucket object Nothing
     return $ content == content'
 
 propFailure :: S3.Bucket -> S3.Object -> ChunkSize -> BSL.ByteString -> Property

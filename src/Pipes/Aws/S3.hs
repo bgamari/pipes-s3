@@ -1,5 +1,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE BangPatterns #-}
 
 -- | A simple streaming interface to the AWS S3 storage service.
 module Pipes.Aws.S3
@@ -7,9 +9,16 @@ module Pipes.Aws.S3
    , Object(..)
      -- * Downloading
      -- | These may fail with either an 'S3DownloadError' or a 'Aws.S3Error'.
+   , ContentRange(..)
    , fromS3
    , fromS3'
    , fromS3WithManager
+
+     -- ** With retries
+   , fromS3WithRetries
+     -- *** Deciding when to retry
+   , RetryPolicy(..)
+   , retryNTimes
 
      -- * Uploading
      -- | These internally use the S3 multi-part upload interface to achieve
@@ -39,6 +48,7 @@ module Pipes.Aws.S3
    , UploadId(..)
    ) where
 
+import Data.IORef
 import Control.Monad (unless, when)
 import Control.Exception (Exception)
 import Data.String (IsString)
@@ -93,6 +103,50 @@ data FailedUploadError = FailedUploadError { failedUploadBucket    :: Bucket
 
 instance Exception FailedUploadError
 
+-- | A byte range within an object.
+data ContentRange = ContentRange { firstBytePos, lastBytePos :: Int }
+
+-- | How many times to attempt an object download before giving up.
+data RetryPolicy m = forall s. RetryIf s (s -> SomeException -> m (s, Bool))
+
+-- | Always retry.
+instance Applicative m => Monoid (RetryPolicy m) where
+    mempty = RetryIf () (\s _ -> pure (s, True))
+    RetryIf sx0 px `mappend` RetryIf sy0 py =
+        RetryIf (sx0, sy0) (\(sx, sy) exc -> merge <$> px sx exc <*> py sy exc)
+      where
+        merge (sx1, againX) (sy1, againY) = ((sx1, sy1), againX && againY)
+
+-- | Retry a download no more than @n@ times.
+retryNTimes :: Applicative m => Int -> RetryPolicy m
+retryNTimes n0 = RetryIf n0 shouldRetry
+  where
+    shouldRetry !n _ = pure (n-1, n > 0)
+
+-- | Download an object from S3, retrying a finite number of times on failure.
+fromS3WithRetries :: forall m. (MonadSafe m)
+                  => RetryPolicy m -> Bucket -> Object
+                  -> Producer BS.ByteString m ()
+fromS3WithRetries (RetryIf retryAcc0 shouldRetry) bucket object = do
+    offsetVar <- liftIO $ newIORef 0
+    go retryAcc0 offsetVar
+  where
+    --go :: s -> IORef Int -> Producer BS.ByteString m ()
+    go retryAcc offsetVar = do
+        offset <- liftIO $ readIORef offsetVar
+        handleAll retry $
+            fromS3 bucket object (Just $ ContentRange offset maxBound) >-> PP.mapM trackOffset
+      where
+        retry exc = do
+            (retryAcc', again) <- lift $ shouldRetry retryAcc exc
+            if again
+              then go retryAcc' offsetVar
+              else fail $ "Failed to download "++show bucket++" "++show object
+
+        trackOffset bs = do
+            liftIO $ modifyIORef' offsetVar (+ BS.length bs)
+            return bs
+
 -- | Download an object from S3
 --
 -- Note that this makes no attempt at reusing a 'Manager' and therefore may not
@@ -100,10 +154,12 @@ instance Exception FailedUploadError
 -- control over the 'Manager' used.
 fromS3 :: MonadSafe m
        => Bucket -> Object
+       -> Maybe ContentRange
+       -- ^ The requested 'ContentRange'. 'Nothing' implies entire object.
        -> Producer BS.ByteString m ()
-fromS3 bucket object = do
+fromS3 bucket object range = do
     cfg <- liftIO Aws.baseConfiguration
-    fromS3' cfg Aws.defServiceConfig bucket object
+    fromS3' cfg Aws.defServiceConfig bucket object range
 
 -- | Download an object from S3 explicitly specifying an @aws@ 'Aws.Configuration',
 -- which provides credentials and logging configuration.
@@ -114,11 +170,11 @@ fromS3 bucket object = do
 fromS3' :: MonadSafe m
         => Aws.Configuration                    -- ^ e.g. from 'Aws.baseConfiguration'
         -> S3.S3Configuration Aws.NormalQuery   -- ^ e.g. 'Aws.defServiceConfig'
-        -> Bucket -> Object
+        -> Bucket -> Object -> Maybe ContentRange
         -> Producer BS.ByteString m ()
-fromS3' cfg s3cfg bucket object = do
+fromS3' cfg s3cfg bucket object range = do
     mgr <- liftIO $ newManager tlsManagerSettings
-    fromS3WithManager mgr cfg s3cfg bucket object
+    fromS3WithManager mgr cfg s3cfg bucket object range
 
 -- | Download an object from S3 explicitly specifying an @http-client@ 'Manager'
 -- and @aws@ 'Aws.Configuration' (which provides credentials and logging
@@ -136,10 +192,11 @@ fromS3WithManager
         => Manager
         -> Aws.Configuration                    -- ^ e.g. from 'Aws.baseConfiguration'
         -> S3.S3Configuration Aws.NormalQuery   -- ^ e.g. 'Aws.defServiceConfig'
-        -> Bucket -> Object
+        -> Bucket -> Object -> Maybe ContentRange
         -> Producer BS.ByteString m ()
-fromS3WithManager mgr cfg s3cfg (Bucket bucket) (Object object) = do
-    req <- liftIO $ buildRequest cfg s3cfg $ S3.getObject bucket object
+fromS3WithManager mgr cfg s3cfg (Bucket bucket) (Object object) range = do
+    let getObj = (S3.getObject bucket object) { S3.goResponseContentRange = fmap (\(ContentRange a b) -> (a,b)) range }
+    req <- liftIO $ buildRequest cfg s3cfg getObj
     Pipes.Safe.bracket (liftIO $ responseOpen req mgr) (liftIO . responseClose) $ \resp ->
         if statusIsSuccessful (responseStatus resp)
           then from $ brRead $ responseBody resp
