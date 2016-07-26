@@ -21,6 +21,10 @@ source-repository head
 
 library
   exposed-modules:     Pipes.Aws.S3
+                       Pipes.Aws.S3.Download
+                       Pipes.Aws.S3.Download.Retry
+                       Pipes.Aws.S3.Upload
+                       Pipes.Aws.S3.Types
   other-extensions:    OverloadedStrings, GeneralizedNewtypeDeriving, ScopedTypeVariables
   hs-source-dirs:      src
   default-language:    Haskell2010
