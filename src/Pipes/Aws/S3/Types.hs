@@ -1,9 +1,9 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
+-- | Basic types used throughout @pipes-s3@.
 module Pipes.Aws.S3.Types
     ( Bucket(..)
     , Object(..)
-    , ContentRange(..)
     ) where
 
 import Data.String (IsString)
@@ -16,6 +16,3 @@ newtype Bucket = Bucket T.Text
 -- | An AWS S3 object name
 newtype Object = Object T.Text
                deriving (Eq, Ord, Show, Read, IsString)
-
--- | A byte range within an object.
-data ContentRange = ContentRange { firstBytePos, lastBytePos :: Int }

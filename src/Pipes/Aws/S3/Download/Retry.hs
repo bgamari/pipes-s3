@@ -2,11 +2,14 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE BangPatterns #-}
 
+-- | @pipes@ 'Producer's from downloading data from AWS S3 objects, with
+-- retry-based failure handling.
 module Pipes.Aws.S3.Download.Retry
     ( fromS3WithRetries
-      -- ** Deciding when to retry
+      -- * Deciding when to retry
     , RetryPolicy(..)
     , retryNTimes
+    , retryIfException
     ) where
 
 import Data.IORef
@@ -36,6 +39,10 @@ retryNTimes :: Applicative m => Int -> RetryPolicy m
 retryNTimes n0 = RetryIf n0 shouldRetry
   where
     shouldRetry !n _ = pure (n-1, n > 0)
+
+-- | Retry if the exception thrown satisfies the given predicate.
+retryIfException :: Applicative m => (SomeException -> Bool) -> RetryPolicy m
+retryIfException predicate = RetryIf () (\s exc -> pure (s, predicate exc))
 
 -- | Download an object from S3, retrying a finite number of times on failure.
 fromS3WithRetries :: forall m. (MonadSafe m)

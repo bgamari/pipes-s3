@@ -1,8 +1,11 @@
+-- | @pipes@ 'Producer's for downloading data from AWS S3 objects.
 module Pipes.Aws.S3.Download
     ( -- | These may fail with either an 'S3DownloadError' or a 'Aws.S3Error'.
       fromS3
     , fromS3'
     , fromS3WithManager
+    , ContentRange(..)
+      -- * Error handling
     , S3DownloadError(..)
     ) where
 
@@ -23,6 +26,10 @@ import qualified Aws.S3 as S3
 
 import Pipes.Aws.S3.Types
 
+-- | A byte range within an object.
+data ContentRange = ContentRange { firstBytePos, lastBytePos :: Int }
+                  deriving (Eq, Ord, Show)
+
 -- | Thrown when an unknown status code is returned from an S3 download request.
 data S3DownloadError = S3DownloadError Bucket Object Status
                      deriving (Show)
@@ -37,7 +44,7 @@ instance Exception S3DownloadError
 fromS3 :: MonadSafe m
        => Bucket -> Object
        -> Maybe ContentRange
-       -- ^ The requested 'ContentRange'. 'Nothing' implies entire object.
+          -- ^ The requested 'ContentRange'. 'Nothing' implies entire object.
        -> Producer BS.ByteString m ()
 fromS3 bucket object range = do
     cfg <- liftIO Aws.baseConfiguration
@@ -49,10 +56,21 @@ fromS3 bucket object range = do
 -- Note that this makes no attempt at reusing a 'Manager' and therefore may not
 -- be very efficient for many small requests. See 'fromS3WithManager' for more
 -- control over the 'Manager' used.
+--
+-- @
+-- import qualified Aws.Core as Aws
+--
+-- getWholeObject :: MonadSafe m => Bucket -> Object -> Producer BS.ByteString m ()
+-- getWholeObject bucket object = do
+--     cfg <- liftIO 'Aws.baseConfiguration'
+--     'fromS3'' cfg 'Aws.defServiceConfig' bucket object Nothing
+-- @
 fromS3' :: MonadSafe m
         => Aws.Configuration                    -- ^ e.g. from 'Aws.baseConfiguration'
         -> S3.S3Configuration Aws.NormalQuery   -- ^ e.g. 'Aws.defServiceConfig'
-        -> Bucket -> Object -> Maybe ContentRange
+        -> Bucket -> Object
+        -> Maybe ContentRange
+           -- ^ The requested 'ContentRange'. 'Nothing' implies entire object.
         -> Producer BS.ByteString m ()
 fromS3' cfg s3cfg bucket object range = do
     mgr <- liftIO $ newManager tlsManagerSettings
@@ -67,14 +85,24 @@ fromS3' cfg s3cfg bucket object range = do
 -- must support TLS; such a manager can be created with
 --
 -- @
--- 'newManager' 'HTTP.Client.TLS.tlsManagerSettings'
+-- import qualified Aws.Core as Aws
+-- import qualified Network.HTTP.Client as HTTP.Client
+-- import qualified Network.HTTP.Client.TLS as HTTP.Client.TLS
+--
+-- getWholeObject :: MonadSafe m => Bucket -> Object -> Producer BS.ByteString m ()
+-- getWholeObject bucket object = do
+--     cfg <- liftIO 'Aws.baseConfiguration'
+--     mgr <- liftIO $ 'newManager' 'HTTP.Client.TLS.tlsManagerSettings'
+--     'fromS3WithManager' mgr cfg 'Aws.defServiceConfig' bucket object Nothing
 -- @
 fromS3WithManager
         :: MonadSafe m
         => Manager
         -> Aws.Configuration                    -- ^ e.g. from 'Aws.baseConfiguration'
         -> S3.S3Configuration Aws.NormalQuery   -- ^ e.g. 'Aws.defServiceConfig'
-        -> Bucket -> Object -> Maybe ContentRange
+        -> Bucket -> Object
+        -> Maybe ContentRange
+           -- ^ The requested 'ContentRange'. 'Nothing' implies entire object.
         -> Producer BS.ByteString m ()
 fromS3WithManager mgr cfg s3cfg (Bucket bucket) (Object object) range = do
     let getObj = (S3.getObject bucket object) { S3.goResponseContentRange = fmap (\(ContentRange a b) -> (a,b)) range }

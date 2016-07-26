@@ -1,8 +1,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
+-- | @pipes@ utilities for uploading data to AWS S3 objects.
 module Pipes.Aws.S3.Upload
-    ( -- * Uploading
-      -- | These internally use the S3 multi-part upload interface to achieve
+    ( -- | These internally use the S3 multi-part upload interface to achieve
       -- streaming upload behavior.
       --
       -- In the case of failure one of two exceptions will be thrown,
@@ -17,10 +17,13 @@ module Pipes.Aws.S3.Upload
       -- an attempt to clean up the parts of the partial upload, there may still
       -- be remnants due to limitations in the @aws@ library.
       --
-      ChunkSize
-    , toS3
+      toS3
     , toS3'
     , toS3WithManager
+
+      -- * Chunk size
+    , ChunkSize
+    , defaultChunkSize
 
       -- * Error handling
     , EmptyS3UploadError(..)
@@ -67,9 +70,13 @@ data FailedUploadError = FailedUploadError { failedUploadBucket    :: Bucket
 instance Exception FailedUploadError
 
 -- | To maintain healthy streaming uploads are performed in a chunked manner.
--- This is the size of the upload chunk size. Due to S3 interface restrictions
--- this must be at least five megabytes.
+-- This is the size of the upload chunk size in bytes. Due to S3 interface
+-- restrictions this must be at least five megabytes.
 type ChunkSize = Int
+
+-- | A reasonable chunk size of 10 megabytes.
+defaultChunkSize :: ChunkSize
+defaultChunkSize = 10 * 1024 * 1024
 
 type ETag = T.Text
 type PartN = Integer
@@ -108,7 +115,15 @@ toS3' cfg s3cfg chunkSize bucket object consumer = do
 -- must support TLS; such a manager can be created with
 --
 -- @
--- 'newManager' 'HTTP.Client.TLS.tlsManagerSettings'
+-- import qualified Aws.Core as Aws
+-- import qualified Network.HTTP.Client as HTTP.Client
+-- import qualified Network.HTTP.Client.TLS as HTTP.Client.TLS
+--
+-- putObject :: MonadSafe m => Bucket -> Object -> Producer BS.ByteString m () -> m ()
+-- putObject bucket object prod = do
+--     cfg <- liftIO 'Aws.baseConfiguration'
+--     mgr <- liftIO $ 'newManager' 'HTTP.Client.TLS.tlsManagerSettings'
+--     'toS3WithManager' mgr cfg 'Aws.defServiceConfig' defaultChunkSize bucket object prod
 -- @
 --
 -- May throw a 'EmptyS3UploadError' if the producer fails to provide any content.
