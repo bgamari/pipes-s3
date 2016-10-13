@@ -30,7 +30,8 @@ import Pipes.Aws.S3.Download
 -- | How many times to attempt an object download before giving up.
 data RetryPolicy m = forall s. RetryIf s (Bucket -> Object -> s -> SomeException -> m (s, Bool))
 
--- | Always retry.
+-- | @mempty@ will always retry. @mappend@ will retry only if both
+-- 'RetryPolicy's say to retry.
 instance Applicative m => Monoid (RetryPolicy m) where
     mempty = RetryIf () (\_ _ s _ -> pure (s, True))
     RetryIf sx0 px `mappend` RetryIf sy0 py =
