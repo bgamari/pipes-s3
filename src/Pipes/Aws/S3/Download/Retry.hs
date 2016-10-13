@@ -10,9 +10,13 @@ module Pipes.Aws.S3.Download.Retry
     , RetryPolicy(..)
     , retryNTimes
     , retryIfException
+      -- * Diagnostics
+    , warnOnRetry
     ) where
 
+import Control.Monad (when)
 import Data.IORef
+import System.IO
 
 import qualified Data.ByteString as BS
 
@@ -24,13 +28,13 @@ import Pipes.Aws.S3.Types
 import Pipes.Aws.S3.Download
 
 -- | How many times to attempt an object download before giving up.
-data RetryPolicy m = forall s. RetryIf s (s -> SomeException -> m (s, Bool))
+data RetryPolicy m = forall s. RetryIf s (Bucket -> Object -> s -> SomeException -> m (s, Bool))
 
 -- | Always retry.
 instance Applicative m => Monoid (RetryPolicy m) where
-    mempty = RetryIf () (\s _ -> pure (s, True))
+    mempty = RetryIf () (\_ _ s _ -> pure (s, True))
     RetryIf sx0 px `mappend` RetryIf sy0 py =
-        RetryIf (sx0, sy0) (\(sx, sy) exc -> merge <$> px sx exc <*> py sy exc)
+        RetryIf (sx0, sy0) (\bucket object (sx, sy) exc -> merge <$> px bucket object sx exc <*> py bucket object sy exc)
       where
         merge (sx1, againX) (sy1, againY) = ((sx1, sy1), againX && againY)
 
@@ -38,11 +42,20 @@ instance Applicative m => Monoid (RetryPolicy m) where
 retryNTimes :: Applicative m => Int -> RetryPolicy m
 retryNTimes n0 = RetryIf n0 shouldRetry
   where
-    shouldRetry !n _ = pure (n-1, n > 0)
+    shouldRetry _ _ !n _ = pure (n-1, n > 0)
 
 -- | Retry if the exception thrown satisfies the given predicate.
 retryIfException :: Applicative m => (SomeException -> Bool) -> RetryPolicy m
-retryIfException predicate = RetryIf () (\s exc -> pure (s, predicate exc))
+retryIfException predicate = RetryIf () (\_ _ s exc -> pure (s, predicate exc))
+
+-- | Modify a 'RetryPolicy' to print a warning on stderr when a retry is
+-- attempted.
+warnOnRetry :: MonadIO m => RetryPolicy m -> RetryPolicy m
+warnOnRetry (RetryIf s0 action) =
+    RetryIf (0::Int, s0) $ \bucket object (!n,s) exc -> do
+        (s', shouldRetry) <- action bucket object s exc
+        when shouldRetry $ liftIO $ hPutStrLn stderr $ show bucket ++ "/" ++ show object ++ ": Retry attempt " ++ show n
+        return ((n+1, s'), shouldRetry)
 
 -- | Download an object from S3, retrying a finite number of times on failure.
 fromS3WithRetries :: forall m. (MonadSafe m)
@@ -59,7 +72,7 @@ fromS3WithRetries (RetryIf retryAcc0 shouldRetry) bucket object = do
             fromS3 bucket object (Just $ ContentRange offset maxBound) >-> PP.mapM trackOffset
       where
         retry exc = do
-            (retryAcc', again) <- lift $ shouldRetry retryAcc exc
+            (retryAcc', again) <- lift $ shouldRetry bucket object retryAcc exc
             if again
               then go retryAcc' offsetVar
               else fail $ "Failed to download "++show bucket++" "++show object
