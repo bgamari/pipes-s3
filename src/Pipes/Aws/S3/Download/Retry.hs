@@ -55,7 +55,8 @@ warnOnRetry :: MonadIO m => RetryPolicy m -> RetryPolicy m
 warnOnRetry (RetryIf s0 action) =
     RetryIf (0::Int, s0) $ \bucket object (!n,s) exc -> do
         (s', shouldRetry) <- action bucket object s exc
-        when shouldRetry $ liftIO $ hPutStrLn stderr $ show bucket ++ "/" ++ show object ++ ": Retry attempt " ++ show n
+        let msg = show bucket ++ "/" ++ show object ++ ": Retry attempt " ++ show n ++ " failed: " ++ show exc
+        when shouldRetry $ liftIO $ hPutStrLn stderr msg
         return ((n+1, s'), shouldRetry)
 
 -- | Download an object from S3, retrying a finite number of times on failure.
