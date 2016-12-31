@@ -1,5 +1,5 @@
 name:                pipes-s3
-version:             0.3.0.0
+version:             0.3.0.1
 synopsis:            A simple interface for streaming data to and from Amazon S3
 description:
     This package provides a simple interface for streaming data to and from
@@ -40,7 +40,7 @@ library
                        http-client      >=0.4  && <0.6,
                        http-client-tls  >=0.2  && <0.4,
                        resourcet        >=1.1  && <1.2,
-                       aws              >=0.13 && <0.15
+                       aws              >=0.13 && <0.16
 
 test-suite pipes-s3-tests
   type:                exitcode-stdio-1.0
