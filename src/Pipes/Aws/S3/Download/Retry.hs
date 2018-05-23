@@ -15,6 +15,7 @@ module Pipes.Aws.S3.Download.Retry
     ) where
 
 import Control.Monad (when)
+import Data.Semigroup
 import Data.IORef
 import System.IO
 
