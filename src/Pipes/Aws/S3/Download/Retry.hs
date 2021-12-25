@@ -64,7 +64,7 @@ warnOnRetry (RetryIf s0 action) =
         return ((n+1, s'), shouldRetry)
 
 -- | Download an object from S3, retrying a finite number of times on failure.
-fromS3WithRetries :: forall m. (MonadSafe m)
+fromS3WithRetries :: forall m. (MonadSafe m, MonadFail m)
                   => RetryPolicy m -> Bucket -> Object
                   -> Producer BS.ByteString m ()
 fromS3WithRetries (RetryIf retryAcc0 shouldRetry) bucket object = do
